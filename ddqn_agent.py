@@ -12,24 +12,19 @@ class DDQNAgent(DQNAgent):
         state_size (int): Size of the input domain
         mem_size (int): Size of the replay buffer
         discount (float): How important is the future rewards compared to the immediate ones [0,1]
-        epsilon (float): Exploration (probability of random values given) value at the start
-        epsilon_min (float): At what epsilon value the agent stops decrementing it
-        epsilon_stop_step (int): At what step the agent stops decreasing the exploration variable
+        epsilon_val (list of tuples): List of (step, epsilon) pairs defining the epsilon decay schedule
         model: Neural network model
         replay_start_size: Minimum size needed to train
     """
 
-    def __init__(self, mem_size=10000, discount=0.95,
-                 epsilon=1, epsilon_min=0, epsilon_stop_step=500*100,
-                 start_temp = 1, temp_decay_rate = 0.995, end_temp = 0.05, transition_len = 500,
+    def __init__(self, mem_size=100000, discount=0.95,
+                 epsilon_val = [(0, 1), (500*1000, 0.2), (2500*1000, 0.05), (5000*1000, 0.02)],
                  model = None, replay_start_size=None, device = device,
-                 update_target_every = 5000, loaded_step=None, loaded_epsilon=None, 
-                 loaded_temp=None, loaded_temp_decay_rate=None):
+                memory_n_step = 7, update_target_every = 10000,
+                loaded_step=None, loaded_epsilon_val=None):
                  
 
-        super().__init__(mem_size, discount, epsilon, epsilon_min, epsilon_stop_step,
-                         start_temp, temp_decay_rate, end_temp, transition_len,
-                         model, replay_start_size, device)
+        super().__init__(mem_size, discount, epsilon_val, model, replay_start_size, device, memory_n_step)
         self.target_model = copy.deepcopy(self.model)
         self.target_model.load_state_dict(self.model.state_dict())
         self.update_target_every = update_target_every
@@ -37,12 +32,25 @@ class DDQNAgent(DQNAgent):
         # Restore loaded parameters if provided
         if loaded_step is not None:
             self.step = loaded_step
-        if loaded_epsilon is not None:
-            self.epsilon = loaded_epsilon
-        if loaded_temp is not None:
-            self.temp = loaded_temp
-        if loaded_temp_decay_rate is not None:
-            self.temp_decay_rate = loaded_temp_decay_rate
+
+            if loaded_epsilon_val is not None:
+                self.epsilon_val = loaded_epsilon_val
+                epsilon_found = False
+                for phase in range(len(self.epsilon_val)-1):
+                    t, val = self.epsilon_val[phase]
+                    self.epsilon_phase = phase
+                    epsilon_diff = (self.epsilon_val[self.epsilon_phase][1] - self.epsilon_val[self.epsilon_phase+1][1])
+                    t_diff = (self.epsilon_val[self.epsilon_phase+1][0] - self.epsilon_val[self.epsilon_phase][0])
+                    self.epsilon_decay = epsilon_diff / t_diff
+                    self.epsilon = val - (loaded_step - t) * self.epsilon_decay
+                    epsilon_found = True
+                    break
+                if not epsilon_found:
+                    # If loaded_step exceeds all defined phases, set to last phase's epsilon
+                    self.epsilon_phase = len(self.epsilon_val) - 2
+                    self.epsilon = self.epsilon_val[-1][1]
+                    self.epsilon_decay
+            
 
     def _calc_prior(self, state_0, next_state_n, R, done_n, n):
         with torch.no_grad():

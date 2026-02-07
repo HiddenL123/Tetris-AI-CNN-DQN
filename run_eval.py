@@ -45,7 +45,7 @@ def run_eval(dir_name: str, model_name: str = "model.pth", episodes: int = 100, 
                     best_action = action
                     best_seq = move_seq
                     break
-            _, done = env.play_moves(best_action, render=render, mode = "realistic", move_seq=best_seq)
+            _, _, done = env.play_moves(best_action, render=render, mode = "realistic", move_seq=best_seq)
             current_state = env._get_board_props(env.board)
             if best_state[1:] == current_state[1:]:
                 #print(True)
@@ -66,12 +66,12 @@ def enumerate_run_eval(episodes: int = 128, render: bool = False):
     #     'tetris-20190802-221032-ms25000-e1-ese2000-d0.99',
     #     'tetris-20190802-033219-ms20000-e1-ese2000-d0.95',
     # ]
-    dirs = ['tetris-20260206-023315-ts5000000-bs32-d0.99']
+    dirs = ['tetris-20260207-003526-ts5000000-bs32-d0.99']
     #dirs = ['tetris-20260123-014235-ms25000-e1-ese10000-d0.99']
     max_scores = []
     for d in dirs:
         print(f"Evaluating dir '{d}'")
-        scores = run_eval(d, episodes=episodes, render=render, model_name="model_best.pth")
+        scores = run_eval(d, episodes=episodes, render=render, model_name="model_step2100000.pth")
         max_scores.append((d, max(scores)))
 
     max_scores.sort(key=lambda t: t[1], reverse=True)

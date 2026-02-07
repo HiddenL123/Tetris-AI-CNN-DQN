@@ -59,7 +59,7 @@ class DQNEnv(Tetris):
 
     def _get_board_props(self, board, last_move = "Default", future_props = None) -> List[int]:
         """Get properties of the board"""
-        lines, board = self._clear_lines(board, last_move = last_move)
+        lines, damage, board = self._clear_lines(board, last_move = last_move)
         holes = self._number_of_holes(board)
         total_bumpiness, max_bumpiness = self._bumpiness(board)
         sum_height, max_height, min_height = self._height(board)
@@ -338,13 +338,13 @@ class intEnv(DQNEnv):
                 elif k == "e":  # e (clockwise rotation)
                     self.move([0, 0], 90)
                 elif k == " ":  # space
-                    reward, done = self.hard_drop(self.current_pos, self.current_rotation, render=render)
+                    result = self.hard_drop(self.current_pos, self.current_rotation, render=render)
                 
                     self.render(wait_key=True)
-                    return (reward, done)
+                    return result
                 self.render(wait_key=True)
-            reward, done = self.hard_drop(self.current_pos, self.current_rotation, render=render)
-            return (reward, done)
+            result = self.hard_drop(self.current_pos, self.current_rotation, render=render)
+            return result
         
 class AdvEnv(intEnv):
     def __init__(self):
@@ -391,7 +391,7 @@ class AdvEnv(intEnv):
 
     def _get_board_props(self, board, last_move = "Default", future_props = None):
         """Get properties of the board as tuple (board_2d, scalar_features) for LargeModel."""
-        lines, damage, board = self._clear_lines(board, last_move = last_move, mode = "both")
+        lines, damage, board = self._clear_lines(board, last_move = last_move)
         holes = self._number_of_holes(board)
         total_bumpiness, max_bumpiness = self._bumpiness(board)
         sum_height, max_height, min_height = self._height(board)

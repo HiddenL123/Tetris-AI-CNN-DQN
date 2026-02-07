@@ -14,13 +14,8 @@ class AgentConf:
     def __init__(self, resume_from_checkpoint: Optional[str] = None, resume_step: Optional[int] = None):
         self.batch_size = 32
         self.total_steps = 5000000  # Total training steps
-        self.epsilon = 1
-        self.epsilon_min = 0.05
-        self.epsilon_stop_step = 800000
+        self.epsilon_val = [(0, 1.0), (500*1000, 0.2), (2500*1000, 0.05), (self.total_steps, 0.02)]  # Epsilon decay schedule
         self.transition = 600000
-        self.start_temp = 1
-        self.temp_decay_rate = 0.9999992
-        self.end_temp = 0.1
 
         self.mem_size = 250000
         self.discount = 0.99
@@ -39,12 +34,16 @@ class AgentConf:
 #for logging
 stats = {
     'score': {'avg': 0.0, 'min': 0.0, 'max': 0.0},
+    'damages': {'avg': 0.0, 'min': 0.0, 'max': 0.0},
     'q_value': {'predicted': 0.0, 'td error': 0.0},
     'epsilon': 0.0,
-    'temp': 0.0,
     'height_at_t': {"step_10" : 0.0, "step_20": 0.0}
 }
 
+def calc_reward(r1_line, r2_damage, done, env, step):
+    """Calculate reward based on lines cleared, damage sent, and game over."""
+    return r1_line + (-0.02 * max(env._height(env.board)[1] - 4, 0))* step/conf.total_steps
+    
 
 # Run dqn with Tetris
 # noinspection PyShadowingNames
@@ -53,9 +52,8 @@ def dqn(conf: AgentConf):
 
     # Determine if resuming and set loaded parameters
     loaded_step = None
-    loaded_epsilon = None
-    loaded_temp = None
-    loaded_temp_decay_rate = None
+    loaded_epsilon_val = None
+
     log_dir = None
     resume_step = None
     
@@ -81,29 +79,10 @@ def dqn(conf: AgentConf):
             # Calculate loaded parameters based on step
             loaded_step = resume_step
             
-            # Calculate epsilon at this step
-            if resume_step < conf.epsilon_stop_step:
-                loaded_epsilon = conf.epsilon - (conf.epsilon - conf.epsilon_min) * (resume_step / conf.epsilon_stop_step)
-            else:
-                loaded_epsilon = conf.epsilon_min
-            
-            # Calculate temp at this step
-            steps_into_temp = resume_step - conf.epsilon_stop_step
-            if steps_into_temp < conf.transition:
-                # In transition phase
-                progress = steps_into_temp / conf.transition
-                loaded_temp = conf.start_temp * (conf.temp_decay_rate ** (resume_step))
-            else:
-                # In Boltzmann phase, apply temperature decay
-                loaded_temp = conf.start_temp * (conf.temp_decay_rate ** (resume_step))
-            
-            loaded_temp_decay_rate = conf.temp_decay_rate
-            
             print(f"Resuming from checkpoint at step {resume_step}")
             print(f"  - Model: {model_file}")
             print(f"  - Memory: {memory_file}")
-            print(f"  - Loaded epsilon: {loaded_epsilon:.6f}")
-            print(f"  - Loaded temp: {loaded_temp:.6f}")
+            print(f"  - Loaded epsilon: {loaded_epsilon_val:.6f}")
         else:
             raise ValueError("resume_step must be specified when resuming from checkpoint")
     else:
@@ -116,10 +95,9 @@ def dqn(conf: AgentConf):
     agent = DDQNAgent(device = "cuda", #device
                      mem_size=conf.mem_size, replay_start_size=conf.replay_start_size, #replay
                      discount=conf.discount,
-                     epsilon=conf.epsilon, epsilon_min=conf.epsilon_min, epsilon_stop_step=conf.epsilon_stop_step,
-                     start_temp=conf.start_temp, temp_decay_rate=conf.temp_decay_rate, end_temp=conf.end_temp, transition_len=conf.transition, 
+                     epsilon_val =conf.epsilon_val,
                      model = LargeModel(board_dim=(10, 20), scalar_feature_dim=14), update_target_every=conf.update_target_every,
-                     loaded_step=loaded_step, loaded_epsilon=loaded_epsilon, loaded_temp=loaded_temp, loaded_temp_decay_rate=loaded_temp_decay_rate
+                     loaded_step=loaded_step, loaded_epsilon_val = loaded_epsilon_val
                      )
 
     # Load checkpoint if resuming
@@ -133,6 +111,7 @@ def dqn(conf: AgentConf):
     log = CustomTensorBoard(log_dir=log_dir)
 
     episode_scores = []
+    episode_damages = []
     episode_height_at_10 = []
     episode_height_at_20 = []
 
@@ -174,7 +153,8 @@ def dqn(conf: AgentConf):
                 final_seq = move_seq
                 break
 
-        reward, done = env.play_moves(best_action, render=render, mode="fast", move_seq=final_seq)
+        r1_line, r2_damage, done = env.play_moves(best_action, render=render, mode="fast", move_seq=final_seq)
+        reward = calc_reward(r1_line, r2_damage, done, env, global_step)
         agent.add_to_memory(current_state, next_states[best_action][0], reward, done)
         current_state = next_states[best_action][0]
         episode_step += 1
@@ -199,8 +179,9 @@ def dqn(conf: AgentConf):
         
         # Episode end
         if done:
-            episode_score = env.get_round_score()
+            episode_score, episode_damage = env.get_round_score()
             episode_scores.append(episode_score)
+            episode_damages.append(episode_damage)
             episode_height_at_10.append(env.height_at_10)
             episode_height_at_20.append(env.height_at_20)
             
@@ -218,6 +199,10 @@ def dqn(conf: AgentConf):
                 stats['score']['avg'] = mean(episode_scores[-100:])  # Last 100 episodes
                 stats['score']['min'] = min(episode_scores[-100:])
                 stats['score']['max'] = max(episode_scores[-100:])
+            if episode_damages:
+                stats['damages']['avg'] = mean(episode_damages[-100:])  # Last 100 episodes
+                stats['damages']['min'] = min(episode_damages[-100:])
+                stats['damages']['max'] = max(episode_damages[-100:])
             if q_values:
                 stats['q_value']['predicted'] = mean(q_values[-100:])
             if td_errors:
@@ -229,7 +214,6 @@ def dqn(conf: AgentConf):
                 stats['height_at_t']['step_20'] = mean(episode_height_at_20)
                 episode_height_at_20 = []  # reset after logging
             stats['epsilon'] = agent.epsilon
-            stats['temp'] = agent.temp
 
             log.log(global_step, stats)
             steps_wrapped.set_description(f"Score: {stats['score']['avg']:.1f} | Epsilon: {agent.epsilon:.4f} | Step: {global_step}")

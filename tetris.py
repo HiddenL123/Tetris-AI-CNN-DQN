@@ -166,6 +166,8 @@ class Tetris:
         self.queue = []
         self.score = 0
         self.round_score = 0
+        self.damage_score = 0
+        self.round_damage_score = 0
         Tetris.BOARD_HEIGHT += hidden_rows
         self.hidden_rows = hidden_rows
         self.back_to_back = 0
@@ -185,7 +187,9 @@ class Tetris:
             self.queue.append(self.bag.pop(0))
         self._new_round(piece_fall=False)
         self.score = 0
+        self.damage_score = 0
         self.round_score = 0
+        self.round_damage_score = 0
         self.last_move = None
         self.garbage_queue = []
         self.hold_used = False
@@ -211,24 +215,28 @@ class Tetris:
         Each block placed counts as one.
         For lines cleared, it is used BOARD_WIDTH * lines_cleared ^ 2.
         """
-        return self.score
+        return self.score, self.damage_score
     
-    def get_round_score(self):
+    def get_episode_score(self):
         """Returns the current round score."""
-        return self.round_score
+        return self.round_score, self.round_damage_score
 
     def _new_round(self, piece_fall=False, scoring = True) -> int:
         """Starts a new round (new piece)"""
         score = 0
+        damage_score = 0
         if piece_fall:
             # Update board and calculate score
             piece = self._get_rotated_piece(self.current_rotation)
             self.board = self._add_piece_to_board(piece, self.current_pos)
-            lines_cleared, self.board = self._clear_lines(self.board)
+            lines_cleared, damage, self.board = self._clear_lines(self.board)
             score = 1 + (lines_cleared ** 2) * Tetris.BOARD_WIDTH
+            damage_score = damage
             if scoring:
                 self.score += score
+                self.damage_score += damage_score
                 self.round_score += score
+                self.round_damage_score += damage_score
 
         # Generate new bag with the pieces
         if len(self.bag) == 0:
@@ -243,7 +251,7 @@ class Tetris:
         if not self.is_valid_position(self._get_rotated_piece(self.current_rotation), self.current_pos):
             self.game_over = True
         self.game_step += 1
-        return score
+        return score, damage_score
 
     def is_valid_position(self, piece, pos):
         """Check if there is a collision between the current piece and the board.
@@ -318,7 +326,7 @@ class Tetris:
             board[y + pos[1]][x + pos[0]] = Tetris.MAP_BLOCK
         return board
 
-    def _clear_lines(self, board, mode = 'line_clear', last_move = "Default"):
+    def _clear_lines(self, board, last_move = "Default"):
         """Clears completed lines in a board"""
         # Check if lines can be cleared
         lines_to_clear = [index for index, row in enumerate(board) if sum(row) == Tetris.BOARD_WIDTH]
@@ -333,12 +341,7 @@ class Tetris:
             # Add new lines at the top
             for _ in lines_to_clear:
                 board.insert(0, [0 for _ in range(Tetris.BOARD_WIDTH)])
-        if mode == 'line_clear':
-            return len(lines_to_clear), board
-        elif mode == 'damage':
-            return self.calculate_lines_sent(lines_to_clear, t_spin, self.back_to_back), board
-        elif mode == 'both':
-            return len(lines_to_clear), self.calculate_lines_sent(len(lines_to_clear), t_spin, self.back_to_back), board
+        return len(lines_to_clear), self.calculate_lines_sent(len(lines_to_clear), t_spin, self.back_to_back), board
 
     def check_t_spin(self, board, piece_position, piece_rotation, piece_id, last_move):
         """Check if the current move was a T-spin."""
@@ -431,12 +434,13 @@ class Tetris:
             self.current_pos[1] += 1
         self.current_pos[1] -= 1
         # start new round
-        score = self._new_round(piece_fall=True)
+        reg_score, damage_score = self._new_round(piece_fall=True)
         if self.game_over:
-            score -= 2
+            reg_score -= 2
+            damage_score -= 2
         if render:
             self.render(wait_key=True)
-        return score, self.game_over
+        return reg_score, damage_score, self.game_over
     
     def hold_piece(self):
         if not self.hold_used:

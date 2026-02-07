@@ -25,8 +25,7 @@ class DQNAgent:
     """
 
     def __init__(self, mem_size=100000, discount=0.95,
-                 epsilon=1, epsilon_min=0, epsilon_stop_step=500*100,
-                 start_temp = 1, temp_decay_rate = 0.999, end_temp = 0.05, transition_len = 500,
+                 epsilon_val = [(0, 1), (500*1000, 0.2), (2500*1000, 0.05), (5000*1000, 0.02)],
                  model = None, replay_start_size=None, device = device,
                 memory_n_step = 7):
                  
@@ -35,17 +34,16 @@ class DQNAgent:
         self.memory = PrioritizedReplayBuffer(capacity=mem_size)
         self.mem_size = mem_size
         self.discount = discount
-        self.epsilon = epsilon
-        self.epsilon_min = epsilon_min
-        self.epsilon_max = epsilon
-        self.epsilon_decay = (self.epsilon_max - self.epsilon_min) / epsilon_stop_step
-        self.start_temp = start_temp
-        self.temp_decay_rate = temp_decay_rate
-        self.end_temp = end_temp
-        self.temp = start_temp
-        self.transition_len = transition_len
-        self.temp_start_step = epsilon_stop_step
-        self.temp = start_temp
+        self.epsilon_phase = 0
+        self.epsilon_val = epsilon_val
+        self.epsilon = self.epsilon_val[self.epsilon_phase][1]
+        if len(epsilon_val)> 1:
+            epsilon_diff = (self.epsilon_val[self.epsilon_phase][1] - self.epsilon_val[self.epsilon_phase+1][1])
+            t_diff = (self.epsilon_val[self.epsilon_phase+1][0] - self.epsilon_val[self.epsilon_phase][0])
+            self.epsilon_decay = epsilon_diff / t_diff
+        else:
+            self.epsilon_decay = 0
+
         if not replay_start_size:
             replay_start_size = mem_size / 2
         self.replay_start_size = replay_start_size
@@ -140,17 +138,9 @@ class DQNAgent:
             return self._greedy_selection(states_list)
         
         # Phase 1: Epsilon-greedy
-        if self.step < self.temp_start_step:
-            return self._epsilon_greedy_selection(states_list)
-        
-        # Phase 2: Transition (blend epsilon-greedy and Boltzmann)
-        elif self.step < self.temp_start_step + self.transition_len:
-            return self._transition_selection(states_list)
-        
-        # Phase 3: Pure Boltzmann
         else:
-            return self._boltzmann_selection(states_list)
-    
+            return self._epsilon_greedy_selection(states_list)
+           
     def _greedy_selection(self, states):
         """Pure greedy selection - no exploration (batched)"""
         if not states:
@@ -168,41 +158,6 @@ class DQNAgent:
             return random.choice(list(states))
         else:
             return self._greedy_selection(states)
-    
-    def _boltzmann_selection(self, states):
-        """Boltzmann (softmax) exploration (batched)"""
-        if not states:
-            return None
-        
-        # Batch predict all states at once
-        values = self.model.batch_predict(states, device=self.device)
-        
-        # Apply softmax with temperature
-        values_tensor = torch.tensor(values, dtype=torch.float32, device=self.device)
-        probabilities = torch.softmax(values_tensor / self.temp, dim=0)
-        
-        # Sample based on probabilities
-        chosen_idx = torch.multinomial(probabilities, 1).item()
-        return states[chosen_idx]
-
-    def _transition_selection(self, states_list):
-        """Blend between epsilon-greedy and Boltzmann"""
-        # Calculate transition progress (0.0 to 1.0)
-        progress = (self.step - self.temp_start_step) / self.transition_len
-        
-        # Decide which strategy to use based on progress
-        # Early in transition: mostly epsilon-greedy
-        # Late in transition: mostly Boltzmann
-        if random.random() < (1 - progress):
-            # Use epsilon-greedy (but with reduced epsilon)
-            reduced_epsilon = self.epsilon * (1 - progress)
-            if random.random() <= reduced_epsilon:
-                return random.choice(states_list)
-            else:
-                return self._greedy_selection(states_list)
-        else:
-            # Use Boltzmann
-            return self._boltzmann_selection(states_list)
     
     
     def train(self, batch_size=32, epochs=1):
@@ -317,7 +272,7 @@ class DQNAgent:
         # -------- optimize --------
         self.model.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.model.optimizer.step()
 
         self.memory.update_priorities(indices, td_errors.cpu().numpy())
@@ -326,10 +281,36 @@ class DQNAgent:
     def increment_step(self):
         """Increments the internal step counter"""
         self.step += 1
-        # Epsilon decay
+        self._step_epsilon()
+        
+    
+    def _step_epsilon(self):
+        # If we are at the very last phase, just lock to the final value
+        if self.epsilon_phase >= len(self.epsilon_val) - 1:
+            self.epsilon = self.epsilon_val[-1][1]
+            self.epsilon_decay = 0
+            return
+
+        # Decay the current epsilon
         self.epsilon -= self.epsilon_decay
-        self.epsilon = max(self.epsilon_min, self.epsilon)
-        # Temperature decay
-        if self.step >= self.temp_start_step:
-            self.temp *= self.temp_decay_rate
-            self.temp = max(self.end_temp, self.temp)
+
+        # Check if we've reached the start-step of the NEXT phase
+        next_phase_step = self.epsilon_val[self.epsilon_phase + 1][0]
+        
+        if self.step >= next_phase_step:
+            self.epsilon_phase += 1
+            # Set current epsilon to the start of this new phase
+            self.epsilon = self.epsilon_val[self.epsilon_phase][1]
+            
+            # Calculate the new decay for the upcoming interval
+            if self.epsilon_phase < len(self.epsilon_val) - 1:
+                next_val = self.epsilon_val[self.epsilon_phase + 1][1]
+                next_step = self.epsilon_val[self.epsilon_phase + 1][0]
+                
+                epsilon_diff = self.epsilon - next_val
+                t_diff = next_step - self.step
+                self.epsilon_decay = epsilon_diff / t_diff if t_diff > 0 else 0
+            else:
+                self.epsilon_decay = 0
+
+
